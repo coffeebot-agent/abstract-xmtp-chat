@@ -20,7 +20,6 @@ export function useMessages(
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const streamRef = useRef<{ end: () => Promise<unknown> } | null>(null);
-  const conversationIdRef = useRef<string | null>(null);
 
   // Load messages for a conversation
   const loadMessages = useCallback(async () => {
@@ -35,7 +34,6 @@ export function useMessages(
     try {
       await conversation.sync();
       const msgs = await conversation.messages();
-      // Sort by sentAt ascending
       msgs.sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime());
       setMessages(msgs);
     } catch (err) {
@@ -48,14 +46,9 @@ export function useMessages(
     }
   }, [conversation]);
 
-  // Stream new messages
+  // Stream new messages via async iterable
   useEffect(() => {
     if (!conversation) return;
-
-    // If conversation changed, reset
-    if (conversationIdRef.current !== conversation.id) {
-      conversationIdRef.current = conversation.id;
-    }
 
     let cancelled = false;
 
@@ -67,23 +60,20 @@ export function useMessages(
       }
 
       try {
-        const stream = await conversation.stream({
-          onValue: (message) => {
-            if (!cancelled) {
-              setMessages((prev) => {
-                // Don't add duplicates
-                if (prev.some((m) => m.id === message.id)) return prev;
-                return [...prev, message];
-              });
-            }
-          },
-          onError: (err) => {
-            console.error("Message stream error:", err);
-          },
-        });
+        const stream = await conversation.stream();
         streamRef.current = stream;
+
+        for await (const message of stream) {
+          if (cancelled) break;
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === message.id)) return prev;
+            return [...prev, message];
+          });
+        }
       } catch (err) {
-        console.error("Failed to start message stream:", err);
+        if (!cancelled) {
+          console.error("Message stream error:", err);
+        }
       }
     };
 
@@ -110,12 +100,6 @@ export function useMessages(
       setIsSending(true);
       try {
         await conversation.sendText(text.trim());
-        // The stream should pick up the new message, but also
-        // refresh to be safe
-        await conversation.sync();
-        const msgs = await conversation.messages();
-        msgs.sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime());
-        setMessages(msgs);
       } catch (err) {
         console.error("Send message error:", err);
         throw err;

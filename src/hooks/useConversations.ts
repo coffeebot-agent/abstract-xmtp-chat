@@ -13,7 +13,9 @@ interface UseConversationsReturn {
   refresh: () => Promise<void>;
 }
 
-export function useConversations(client: Client | null): UseConversationsReturn {
+export function useConversations(
+  client: Client | null
+): UseConversationsReturn {
   const [conversations, setConversations] = useState<ConversationItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,14 +28,10 @@ export function useConversations(client: Client | null): UseConversationsReturn 
     setError(null);
 
     try {
-      // Sync from network first
       await client.conversations.sync();
-
-      // List DMs (which are the main conversation type for 1:1 chat)
       const allConversations = await client.conversations.list({
         consentStates: [ConsentState.Allowed, ConsentState.Unknown],
       });
-
       setConversations(allConversations);
     } catch (err) {
       const message =
@@ -45,7 +43,7 @@ export function useConversations(client: Client | null): UseConversationsReturn 
     }
   }, [client]);
 
-  // Stream new conversations
+  // Stream new conversations via async iterable
   useEffect(() => {
     if (!client) return;
 
@@ -53,23 +51,20 @@ export function useConversations(client: Client | null): UseConversationsReturn 
 
     const startStream = async () => {
       try {
-        const stream = await client.conversations.stream({
-          onValue: (conversation) => {
-            if (!cancelled) {
-              setConversations((prev) => {
-                // Don't add duplicates
-                if (prev.some((c) => c.id === conversation.id)) return prev;
-                return [conversation, ...prev];
-              });
-            }
-          },
-          onError: (err) => {
-            console.error("Conversation stream error:", err);
-          },
-        });
+        const stream = await client.conversations.stream();
         streamRef.current = stream;
+
+        for await (const conversation of stream) {
+          if (cancelled) break;
+          setConversations((prev) => {
+            if (prev.some((c) => c.id === conversation.id)) return prev;
+            return [conversation, ...prev];
+          });
+        }
       } catch (err) {
-        console.error("Failed to start conversation stream:", err);
+        if (!cancelled) {
+          console.error("Conversation stream error:", err);
+        }
       }
     };
 
